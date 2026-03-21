@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/20 backdrop-blur-xl border border-white/30 shadow-2xl;
+  }
+  
+  .hero-gradient {
+    @apply bg-gradient-to-br from-primary-blue via-blue-500 to-dark-blue;
+  }
+  
+  .btn-water {
+    @apply bg-gradient-to-r from-primary-blue to-accent-orange hover:from-accent-orange hover:to-primary-blue text-white font-bold py-3 px-8 rounded-full shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300;
+  }
+}

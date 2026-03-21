@@ -1,14 +1,25 @@
-const express = require('express')
+import express from 'express'
+import cors from 'cors'
+import helmet from 'helmet'
+import rateLimit from 'express-rate-limit'
+import dotenv from 'dotenv'
+import mongoose from 'mongoose'
+import Razorpay from 'razorpay'
+import nodemailer from 'nodemailer'
+import path, { dirname } from 'path'
+import { fileURLToPath } from 'url'
+
+dotenv.config()
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+
 const app = express()
-const port = 8000
+const port = Number(process.env.PORT || 8000)
+const isDevelopment = process.env.NODE_ENV !== 'production'
+const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000'
 
-const nodemailer = require('nodemailer')
-const mongoose = require('mongoose')
-const Razorpay = require('razorpay')
-const crypto = require('crypto')
-
-app.use(express.static("public"))
-app.use(express.json())
+let isDatabaseConnected = false
 
 const bookingSchema = new mongoose.Schema({
   firstName: String,
@@ -23,216 +34,217 @@ const bookingSchema = new mongoose.Schema({
   rawAmount: Number,
   promo: String,
   amount: Number
-});
+})
 
-var Book = mongoose.model('bookingDetail', bookingSchema);
+const cancelSchema = new mongoose.Schema({
+  radioOption: String,
+  payorderId: String,
+  bookingId: String,
+  firstName: String,
+  lastName: String,
+  email: String,
+  phone: Number,
+  date: String
+})
 
-main().catch(err => console.log(err));
+const Book = mongoose.models.bookingDetail || mongoose.model('bookingDetail', bookingSchema)
+const Cancel =
+  mongoose.models.cancelDetail || mongoose.model('cancelDetail', cancelSchema, 'cancelDetail')
 
-async function main() {
-  await mongoose.connect('mongodb://localhost:27017/waterpark');
-  console.log('mongo db connect zala ki re baba');
+async function connectDatabase() {
+  if (!process.env.MONGODB_URI) {
+    console.warn('MONGODB_URI not set, continuing without database features')
+    return
+  }
+
+  try {
+    await mongoose.connect(process.env.MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000
+    })
+    isDatabaseConnected = true
+    console.log('MongoDB connected')
+  } catch (error) {
+    console.warn('MongoDB unavailable, continuing without database features')
+  }
 }
 
-var instance = new Razorpay({
-  key_id: 'rzp_test_xTmCshVEBq5XP8',
-  key_secret: '1XbD83hSOxTJPrM08exxQQ1s',
-});
+await connectDatabase()
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+})
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+})
+
+app.use(helmet())
+app.use(
+  cors({
+    origin: true,
+    credentials: true
+  })
+)
+
+app.use(
+  '/api/',
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100
+  })
+)
+
+app.use(express.json({ limit: '10mb' }))
+app.use(express.urlencoded({ extended: true, limit: '10mb' }))
+
+if (isDevelopment) {
+  app.use('/src/', (req, res) => {
+    res.redirect(`${frontendUrl}${req.originalUrl}`)
+  })
+}
+
+app.use(express.static(path.join(__dirname, 'dist')))
+
+function requireDatabase(req, res, next) {
+  if (!isDatabaseConnected) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database unavailable'
+    })
+  }
+
+  next()
+}
+
+app.post('/api/contact', async (req, res) => {
+  try {
+    await transporter.sendMail({
+      from: req.body.email,
+      to: process.env.EMAIL_USER,
+      subject: `New Message from ${req.body.name}`,
+      text: req.body.message
+    })
+
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Contact error:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+app.post('/api/bookingDetails', requireDatabase, async (req, res) => {
+  try {
+    const data = new Book(req.body)
+    await data.save()
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Booking error:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+app.post('/api/create/orderId', (req, res) => {
+  const options = {
+    amount: req.body.amount * 100,
+    currency: 'INR',
+    receipt: `receipt_${Date.now()}`
+  }
+
+  razorpay.orders.create(options, (error, order) => {
+    if (error) {
+      console.error('Razorpay error:', error)
+      return res.status(500).json({ error })
+    }
+
+    res.json({ orderId: order.id })
+  })
+})
+
+app.post('/api/payment/verify', async (req, res) => {
+  try {
+    const crypto = await import('crypto')
+    const body =
+      req.body.response.razorpay_order_id + '|' + req.body.response.razorpay_payment_id
+    const expectedSignature = crypto.default
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(body)
+      .digest('hex')
+
+    const isAuthentic = expectedSignature === req.body.response.razorpay_signature
+
+    if (isAuthentic && isDatabaseConnected) {
+      const booking = await Book.findOne().sort({ _id: -1 })
+
+      if (booking) {
+        await transporter.sendMail({
+          from: process.env.EMAIL_USER,
+          to: booking.email,
+          subject: `AquaLand Booking Confirmation - #${booking._id}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2>Booking Confirmed</h2>
+              <p><strong>Name:</strong> ${booking.firstName} ${booking.lastName}</p>
+              <p><strong>Date:</strong> ${booking.date}</p>
+              <p><strong>Total:</strong> INR ${booking.amount}</p>
+              <p><strong>Adults:</strong> ${booking.adults} | <strong>Children:</strong> ${booking.children}</p>
+              <p><strong>Booking ID:</strong> <strong>${booking._id}</strong></p>
+              <hr>
+              <p>We can't wait to see you at AquaLand.</p>
+            </div>
+          `
+        })
+      }
+    }
+
+    res.json({ signatureIsValid: isAuthentic })
+  } catch (error) {
+    console.error('Payment verification error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+app.post('/api/cancelDetails', requireDatabase, async (req, res) => {
+  try {
+    const cancelData = new Cancel(req.body)
+    await cancelData.save()
+    await Book.deleteOne({ _id: req.body.bid })
+
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: req.body.email,
+      subject: 'Booking Cancellation Confirmed',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Booking Cancelled</h2>
+          <p><strong>Name:</strong> ${req.body.firstName} ${req.body.lastName}</p>
+          <p><strong>Booking ID:</strong> ${req.body.bid}</p>
+          <p><strong>Refund processing in 3-5 business days</strong></p>
+        </div>
+      `
+    })
+
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Cancellation error:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
 
 app.get('/', (req, res) => {
-  res.sendFile(__dirname + "/public/index.html")
+  res.sendFile(path.join(__dirname, 'dist/index.html'))
 })
 
-// send email
-app.post('/', (req, res) => {
-  console.log(req.body);
-
-  const transpoter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: 'kunaldhanawade7@gmail.com',
-      pass: 'manishard7.'
-    }
-  })
-
-  const mailOptions = {
-    from: req.body.email,
-    to: 'kunaldhanawade7@gmail.com',
-    subject: `Message from ${req.body.name}: ${req.body.subject}`,
-    text: req.body.message
-  }
-
-  transpoter.sendMail(mailOptions, (error, info) => {
-    if (error) {
-      console.log(error);
-      res.send('error');
-    }
-    else {
-      console.log('Email Sent: ' + info.response);
-      res.send('success');
-    }
-  })
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist/index.html'))
 })
 
-// send booking details to db
-app.post('/bookingDetails', (req, res) => {
-
-
-  let data = new Book({
-    firstName: req.body.first_name,
-    lastName: req.body.last_name,
-    email: req.body.email,
-    phone: req.body.phone,
-    date: req.body.date,
-    adults: req.body.n_adults,
-    children: req.body.n_children,
-    roomType: req.body.room_type,
-    rooms: req.body.n_rooms,
-    rawAmount: req.body.raw_amount,
-    promo: req.body.promo,
-    amount: req.body.amount
-  })
-
-  data.save().then(() => {
-    console.log('data database madhe gela reee')
-  }).catch(() => {
-    console.log('data database madhe gela... kuch tog gadbad h kunaal')
-  })
-})
-
-
-app.post('/create/orderId', (req, res) => {
-  console.log('ata payment suru zala');
-
-  var options = {
-    amount: req.body.amount,
-    currency: "INR",
-    receipt: "order_rcptid_1"
-  };
-
-  instance.orders.create(options, function (err, order) {
-    if (err) {
-      console.log("Kuch toh gadbad h daya")
-    }
-    console.log(order);
-
-    res.send({ orderId: order.id });
-
-    console.log('payment suru kara... aata signature verification baaki ahe')
-  });
-})
-
-app.post("/api/payment/verify", (req, res) => {
-  console.log("signature verification suru zala aahe")
-
-  let body = req.body.response.razorpay_order_id + "|" + req.body.response.razorpay_payment_id;
-
-  var expectedSignature = crypto.createHmac('sha256', '1XbD83hSOxTJPrM08exxQQ1s')
-    .update(body.toString())
-    .digest('hex');
-  console.log("sig received ", req.body.response.razorpay_signature);
-  console.log("sig generated ", expectedSignature);
-  var response = { "signatureIsValid": "false" }
-  if (expectedSignature === req.body.response.razorpay_signature)
-    response = { "signatureIsValid": "true" }
-
-  console.log("signature verification zala");
-  console.log("ata baghuya data yetoy kaa");
-
-  Book.find().then((result) => {
-    console.log('shevti data database madhun aala ra baba')
-    let ourdata = result.pop();
-    console.log(ourdata);
-
-    const transpoter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: 'kunaldhanawade7@gmail.com',
-        pass: 'manishard7.'
-      }
-    })
-    const mailOptions = {
-      from: 'kunaldhanawade7@gmail.com',
-      to: ourdata.email,
-      subject: `AquaLand Booking Details of ${ourdata.firstName} ${ourdata.lastName}`,
-      text: `Your Booking Details are: \nBooking No. : ${ourdata._id} \nTotal Amount : ${ourdata.amount} \nDate : ${ourdata.date} \nOrder ID : ${req.body.response.razorpay_order_id} \nPayment ID : ${req.body.response.razorpay_payment_id} \n\nThankyou for reserving a day from your precious time in AquaLand. We will wait for you.`
-    }
-    transpoter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        console.log('Email Nhi gela... kuch toh gadbad h kunaal');
-      }
-      else {
-        console.log('Email gele re baba: ' + info.response);
-      }
-    })
-
-  }).catch(() => {
-    console.log('database madhun data azun nhi aala...kuch toh gadbad h kunaal')
-  })
-
-});
-
-// send cancel booking details to db
-app.post('/cancelDetails', (req, res) => {
-  const cancelSchema = new mongoose.Schema({
-    radioOption: String,
-    payorderId: String,
-    bookingId: String,
-    firstName: String,
-    lastName: String,
-    email: String,
-    phone: Number,
-    date: String
-  });
-
-  const Cancel = mongoose.model('cancelDetail', cancelSchema);
-
-  let canceldata = new Cancel({
-    radioOption: req.body.radioOption,
-    payorderId: req.body.poid,
-    bookingId: req.body.bid,
-    firstName: req.body.firstName,
-    lastName: req.body.lastName,
-    email: req.body.email,
-    phone: req.body.phone,
-    date: req.body.date
-  })
-
-  canceldata.save().then(() => {
-    console.log('database madhe data save zala ki ra baba')
-  }).catch(() => {
-    console.log('ata ra deva, data database madhe nhi save zala re')
-  })
-
-  Book.deleteOne({ _id: req.body.bid }).then(() => {
-    console.log('database madhla data delete zala re')
-  }).catch(() => {
-    console.log('database madhla data delete nhi zala, bagha ata kaay karaycha te')
-  })
-
-  const transpoter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: 'kunaldhanawade7@gmail.com',
-      pass: 'manishard7.'
-    }
-  })
-  const mailOptions = {
-    from: 'kunaldhanawade7@gmail.com',
-    to: req.body.email,
-    subject: `AquaLand Booking Cancellation Details of ${req.body.firstName} ${req.body.lastName}`,
-    text: `Your Booking Details for: \n\nBooking No. : ${req.body.bid} \nPayment/Order ID : ${req.body.poid} \nDate : ${req.body.date} \n\nhas been cancelled.\n\nYour amount will be refunded in 3 to 4 working days. Thankyou.`
-  }
-  transpoter.sendMail(mailOptions, (error, info) => {
-    if (error) {
-      console.log('Email Nhi gela... kuch toh gadbad h kunaal');
-    }
-    else {
-      console.log('Email gele re baba: ' + info.response);
-    }
-  })
-})
-
-app.listen(port, () => {
-  console.log(`Example app listening at http://localhost:${port}`)
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Server running at http://0.0.0.0:${port}`)
+  console.log(`Frontend dev expected at ${frontendUrl}`)
+  console.log('API endpoints ready')
 })
