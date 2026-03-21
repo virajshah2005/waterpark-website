@@ -1,0 +1,23 @@
+{
+  "name": "Waterpark Website by Kunal Dhanawade",
+  "version": "1.0.0",
+  "description": "This project is made by Kunal Dhanawade, a student of Shivajirao S. Jondhale College of Engineering, as the Semester V mini project.",
+  "main": "server.js",
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "node server.js"
+  },
+  "author": "Kunal Dhanawade",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.19.0",
+    "express": "^4.17.1",
+    "mongoose": "^6.0.11",
+    "mysql": "^2.18.1",
+    "nodemailer": "^6.7.0",
+    "razorpay": "^2.0.7"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.13"
+  }
+}
