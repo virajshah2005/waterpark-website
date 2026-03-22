@@ -2,3 +2,17 @@
 [2m5:54:44 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mGSAP target  not found. https://gsap.com
 [2m5:55:50 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mGSAP target .hero-cta not found. https://gsap.com
 [2m5:55:50 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mGSAP target  not found. https://gsap.com
+[2m5:56:26 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mGSAP target .hero-cta not found. https://gsap.com
+[2m5:56:26 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mGSAP target  not found. https://gsap.com
+[2m5:56:51 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mSyntaxError[22m: Failed to execute 'querySelector' on 'Document': '#' is not a valid selector.
+[39m > HTMLAnchorElement.<anonymous> js/app.js:126:29
+    124 |    anchor.addEventListener('click', function (e) {
+    125 |      e.preventDefault()
+    126 |      const target = document.querySelector(this.getAttribute('href'))
+        |                               ^
+    127 |      if (target) {
+    128 |        target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+[2m6:05:36 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mGSAP target .hero-cta not found. https://gsap.com
+[2m6:05:36 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mGSAP target  not found. https://gsap.com
+^C
